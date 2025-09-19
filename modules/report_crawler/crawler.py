@@ -19,8 +19,14 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from pymongo import MongoClient
 import time
+
+# Add module paths
+sys.path.insert(0, '/opt/airflow')
+sys.path.append('/opt/airflow/modules')
+
+# Import database module
+from modules.database import get_mongodb_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,35 +40,38 @@ class StockReportCrawler:
     def __init__(self, mongodb_uri=None, headless=True):
         """
         Initialize the Stock Report Crawler.
-        
+
         Args:
             mongodb_uri (str): MongoDB connection URI
             headless (bool): Whether to run Chrome in headless mode
         """
-        self.mongodb_uri = mongodb_uri or os.environ.get("MONGODB_URI", "mongodb://<MONGODB_HOST>:<MONGODB_PORT>/")
+        self.mongodb_uri = mongodb_uri or os.environ.get("MONGODB_URI", "mongodb://localhost:27017/")
         self.headless = headless
         self.driver = None
+        self.mongodb_client = None
         self.collection = None
-        
+
         # Initialize MongoDB connection
         self._init_mongodb()
-        
+
     def _init_mongodb(self):
         """Initialize MongoDB connection and collection."""
         try:
-            client = MongoClient(self.mongodb_uri, serverSelectionTimeoutMS=5000)
-            client.server_info()  # Test connection
-            self.db = client["stockelper"]
-            self.collection = self.db["stock_reports"]
-            
-            # Create indexes for duplicate prevention
-            self.collection.create_index([
-                ('date', 1), 
-                ('company', 1), 
-                ('code', 1)
-            ], unique=True)
-            
-            logger.info("Successfully connected to MongoDB and created indexes.")
+            self.mongodb_client = get_mongodb_client(self.mongodb_uri)
+            if self.mongodb_client.connect():
+                self.collection = self.mongodb_client.get_collection("stock_reports")
+
+                # Create indexes for duplicate prevention
+                self.collection.create_index([
+                    ('date', 1),
+                    ('company', 1),
+                    ('code', 1)
+                ], unique=True)
+
+                logger.info("Successfully connected to MongoDB and created indexes.")
+            else:
+                logger.error("Failed to connect to MongoDB")
+                self.collection = None
         except Exception as e:
             logger.error(f"Failed to connect to MongoDB: {e}")
             self.collection = None
@@ -177,6 +186,9 @@ class StockReportCrawler:
             if self.driver:
                 self.driver.quit()
                 logger.info("WebDriver closed.")
+            if self.mongodb_client:
+                self.mongodb_client.close()
+                logger.info("MongoDB connection closed.")
     
     def _crawl_reports_for_date(self, date_str):
         """
